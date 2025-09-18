@@ -1,0 +1,1224 @@
+---
+title: "Data Mining Final Project"
+author: "Ilham Mneimneh and Mohamad El Nahas"
+date: "2024-12-08"
+output:
+  html_document:
+    theme: readable
+    highlight: espresso
+    number_sections: false
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+    toc_depth: '3'
+---
+
+# Exploratory Data Analysis
+
+## Raw Data Exploration
+
+Using the regular expression `^(?!\d+,\d+,\d{4}(,\d+\.\d){10}).*$`, we identified irregularities in the dataset by examining the placement of commas. Specifically, the expression helped us detect: - An extra comma at the end of one row. - A missing comma in the same row, causing misalignment of the data fields. These issues were problematic as they disrupted the dataset's format, thereby hindering proper parsing. The identified inconsistencies were addressed manually to ensure that the data was correctly aligned and consistent across all rows.
+
+## Combining the Data
+
+The dataset initially consisted of two separate tables corresponding to two distinct geographic locations. Each table contained its own header row, which was removed to ensure consistent formatting and compatibility for merging. The two tables were then manually combined into a single unified dataset.
+
+Additionally, to ensure that some entries in the `Classes` column did not contain unnecessary spaces, which could cause inconsistencies during analysis, the `trimws()` function was applied to the `Classes` column.
+
+```{r}
+# Load the dataset
+dataset <- read.csv("forest_fires_dataset.csv", header = TRUE)
+
+# Add new numeric columns
+dataset$Cordillera<- 0
+dataset$Hudson_Bay <- 0
+
+# Assign [1,0] to the first 122 rows
+dataset$Cordillera[1:122] <- 1
+
+# Assign [0,1] to the next rows (from row 123 onwards)
+dataset$Hudson_Bay[123:nrow(dataset)] <- 1
+
+#Trimming 
+dataset$Classes <- trimws(dataset$Classes)
+```
+
+To enhance the dataset with geospatial context, two new features, `Hudson_Bay` and `Cordillera`, were introduced. These features capture the geographic location associated with each observation using binary values. Specifically:
+
+-   The first 122 rows were assigned a value of `1` for `Cordillera` and `0` for `Hudson_Bay`, indicating that these rows correspond to the Cordillera region.
+-   The remaining rows were assigned a value of `0` for `Cordillera` and `1` for `Hudson_Bay`, indicating that these rows correspond to the Hudson Bay region.
+
+This design provides explicit geospatial context for each observation while maintaining clarity and interpretability in the dataset.
+
+## Scatter Plot
+
+To establish a better understanding of the relationships between the different weather indices, we generated a scatterplot matrix. The scatterplot matrix is an important tool for visualizing pairwise relationships between multiple features, helping us detect correlations, trends, and clusters in the dataset. This visualization aids in identifying which features are closely related and how they might influence the occurance of fires in forests.
+
+```{r, echo=FALSE, fig.width=14, fig.height=10}
+color_palette <- c("fire" = "red", "not fire" = "blue")  # Change colors here if needed
+
+# Map the colors to Classes
+class_colors <- color_palette[dataset$Classes]
+
+# Scatterplot matrix with updated custom colors
+pairs(dataset[, c("day","month","year","Temperature", "Rain","RH", "Ws", "FFMC", "DMC", "DC", "ISI", "BUI", "FWI","Cordillera","Hudson_Bay")],
+      main = "Scatterplot Matrix",
+      col = class_colors)  # Apply updated custom colors
+```
+
+The scatterplot matrix reveals strong positive correlations among fire weather indices such as **FFMC, DMC, DC, ISI, BUI, and FWI**. For instance, DMC and BUI exhibit a clear linear relationship, reflecting their shared influence on fire severity.
+
+However, Rain clearly demonstrates a negative relationship with these indices which makes sense since rainfall reduces vegetation and dryness which consequently leads to lower values for these indices.
+
+The year shows no variability in the dataset, making it redundant; therefore, we can remove this feature.
+
+```{r}
+#Removing Year
+dataset = subset(dataset, select = -`year`)
+```
+
+-   Clustering
+
+The distinction between "fire" (red) and "not fire" (blue) observations becomes apparent in certain features. Fire-related indices such as **FFMC** show a clear clustering pattern, where "fire" cases are associated with higher values, while "not fire" cases are concentrated at lower values.
+
+-   Possibility of Multicollinearity
+
+Given the algebraic relationships shown in the diagram, combined with the high correlation observed between various pairs of fire weather indices, we can suspect the presence of multicollinearity in our data. This potential multicollinearity will be explored in more detail in a subsequent analysis.
+
+## Heat Map
+
+In this step we utilized the `corrplot` library to visualize the calculated correlation matrix.
+
+```{r eval=TRUE, message = FALSE, echo=FALSE, warning=FALSE}
+library(corrplot)
+
+#creating a subset and modifying titles
+setCord = subset(dataset, select = -`Classes`)
+names(setCord)[match(c("Temperature", "Hudson_Bay", "Cordillera"), names(setCord))] = c("Temp", "HB", "Cord")
+
+#creating correlation matrix
+cor_matrix = cor(setCord)
+
+#Visualization
+corrplot(cor_matrix, type="upper", order = "FPC", number.cex = 0.5, tl.pos="n")
+corrplot(cor_matrix, type="lower", order = "FPC", add=T, 
+         tl.pos="d", tl.cex = 0.6, tl.col= "grey20", cl.pos="n")
+```
+
+The size and colors of the circles indicate the correlation of the features.
+
+**Correlations**
+
+-   The heat map confirms what we saw in the scatterplot matrix.
+
+-   It also confirms the relationships between the different features as seen [here](https://cwfis.cfs.nrcan.gc.ca/background/summary/fwi).
+
+-   WI’s correlation to all the fire weather indices is explained by the fact that all these indices directly or indirectly result in the FWI value.
+
+-   Interestingly, ISI has almost no correlation to wind speed despite that fact that it is one of ISI’s components. However, there is a noted positive correlation to FFMC and negative correlation to RH.
+
+-   Additionally, BUI only holds the most significant correlation to the features that it is made up of: DMC and DC. It also holds a significant correlation to FWI, since BUI is one of FWI’s components.
+
+Such significant and high correlations between ISI and FFMC and between BUI, DMC, and DC may indicate colinearity or even multicollinearity.
+
+# Data Processing
+
+## Missing & Duplicate Values
+
+Before training the models, it is essential to inspect the dataset for any missing features. Identifying and addressing these missing values will help ensure data quality and reduce the risk of errors during model training.
+
+```{r}
+# Defining missing value patterns
+custom_missing_values <- c("", " ", "n/a")
+
+# Checking for missing values
+missing_values <- sapply(dataset, function(x) {
+  sum(is.na(x) | x %in% custom_missing_values)
+})
+
+# Results stored in the 'missing_values' variable
+print(missing_values)
+
+```
+
+Based on the table, none of our features have any missing values.
+
+```{r}
+duplicates <- dataset[duplicated(dataset), ]
+
+# View duplicate rows
+print(duplicates)
+```
+
+Regarding duplicates, none of the rows in our dataset appear to be duplicated.
+
+## Out of Bound Values
+
+In this section, out of range values were identified and removed. Such values would hurt our analysis, so their removal is the best choice of action. We utilized the ranges provided in the instructions, and removed any values that go over or under the range for each feature. We did not check the Classes feature since it was already dealt with in a previous step.
+
+Number of rows before filtering:
+
+```{r}
+nrow(dataset)
+```
+
+The `magrittr` library was used here for the pipe *%\>%* function. The pipe function ensures that the output on its left is used for the input on its right to make the process more efficient. Additionally, the `dplyr` library allowed us to make use of the filter() and between() functions. These functions together filter the rows with values that don’t lie between the specified values relative to each feature.
+
+```{r, message=FALSE, warning=FALSE}
+library(magrittr)
+library(dplyr)
+
+# Creating a list with the minimum and maximum values for each feature
+ranges <- list(
+	day = c(Min = 1, Max = 31),
+  month = c(Min = 6, Max = 9),
+  Temperature = c(Min = 22, Max = 42),
+  RH = c(Min = 21, Max = 90),
+  Ws = c(Min = 6, Max = 29),
+  Rain = c(Min = 0, Max = 16.8),
+  FFMC = c(Min = 28.6, Max = 92.5),
+  DMC = c(Min = 1.1, Max = 65.9),
+  DC = c(Min = 7, Max = 220.4),
+  ISI = c(Min = 0, Max = 18.5),
+  BUI = c(Min = 1.1, Max = 68),
+  FWI = c(Min = 0, Max = 31.1)
+)
+
+
+#filtering rows with values that go beyond respective value ranges
+for (col in names(ranges)) {
+  # Get the minimum and maximum values for the current variable from the list
+  min_val <- ranges[[col]]["Min"]
+  max_val <- ranges[[col]]["Max"]
+  
+  # Filter the dataframe to keep only rows within the range of each feature
+  #the !!sym() converts a string to a value the dataframe can recognize
+  dataset <- dataset %>% 
+    filter(between(!!sym(col), min_val, max_val)) 
+}
+```
+
+Number of rows after filtering:
+
+```{r}
+nrow(dataset)
+```
+
+## Outliers
+
+Outliers are seen in multiple features in the interactive box plots below. They were created utilizing the `plotly` and `tidyr` libraries. The `tidyr` library allowed for data manipulation to transpose the features and their data values, and the `plotly` library was used to visualize the data into interactive box plots.
+
+```{r, echo = FALSE, eval = TRUE, warning = FALSE, message=FALSE}
+library(plotly)
+library(tidyr)
+library(magrittr)
+
+# Reshape the data
+dataset_long <- pivot_longer(dataset, cols = -c(`Classes`), names_to = "feature", values_to = "value")
+
+# Define a custom color palette
+custom_colors <- c("fire" = "#FFB6C1", "not fire" = "#ADD8E6")
+
+# Create the plot with custom colors
+plot_ly(dataset_long, 
+        y = ~value, 
+        x = ~feature, 
+        color = ~Classes,  # Color by Classes
+        colors = custom_colors,  # Apply custom colors
+        type = "box") %>%
+  layout(title = "Feature Distribution by Classes",
+         xaxis = list(title = "Features"),
+         yaxis = list(title = "Values"),
+         boxmode = "group")  # Group boxes by Classes
+```
+
+We can see that, in correspondence to the scatter plot, the higher values in the features are grouped in the Fire Class. These high values and outliers are integral to this class distinction, otherwise the results would muddle together and we would lose the distinction we need. Especially for the features that make up the Fire Weather Indices, higher values are what indicate the presence of a fire. The RH value shows an opposite phenomenon, higher values indicate the presence of no fire.
+
+So, we decided to keep the outliers since they are integral to our analysis.
+
+## Class Imbalance
+
+As you can see below, even after filtering the data, the classes are at a 45/55 balance which does not indicate an imbalance.
+
+```{r}
+class_proportions = table(dataset$Classes) %>% prop.table(.) *100
+print(class_proportions)
+```
+
+## Standardization and Normalization
+
+We decided not to normalize, but standardize our data for two main reasons. First, the integral presence of outliers eliminates the possibility of normalization, as normalization would diminish the effects of these outliers. Second, standardization deals with outliers, and the distribution of the data is a mix of both normal and skewed. Applying standardization to our data would allows us to conduct feature selection utilizing PCA and lessen the amount of features especially since there may be an indication the data has co or multicolinearity to one another as discussed above.
+
+```{r, echo = FALSE, eval = TRUE, warning = FALSE, message=FALSE}
+library(plotly)
+library(purrr)
+
+# Identify numeric columns
+numeric_columns <- names(dataset)[sapply(dataset, is.numeric)]
+
+# Create density plots for each numeric column using map
+plot_list <- map(numeric_columns, ~ {
+  col_data <- dataset[[.x]]  # Get column data
+  density_data <- density(col_data, na.rm = TRUE)  # Compute density
+  
+  plot_ly() %>%
+    add_lines(x = density_data$x, y = density_data$y, 
+              line = list(color = 'blue'), 
+              name = paste(.x, "Density")) %>%
+    add_lines(x = rep(mean(col_data, na.rm = TRUE), 2), 
+              y = c(0, max(density_data$y)), 
+              line = list(color = 'red', dash = 'dash'), 
+              name = "Mean") %>%
+    layout(
+      xaxis = list(title = .x), 
+      yaxis = list(title = "Density")
+    )
+})
+
+# Arrange plots in a grid layout with margins to avoid touching or overlapping
+subplot(plot_list, 
+        nrows = ceiling(sqrt(length(plot_list))), 
+        shareX = FALSE, 
+        shareY = FALSE, 
+        margin = 0.05) %>%
+  layout(title = "Density Plots of Numeric Columns")
+```
+
+## Principle Component Analysis
+
+```{r, echo = FALSE, eval = TRUE, warning = FALSE, message=FALSE}
+if (!requireNamespace("ggplot2", quietly = TRUE))
+install.packages('plotly') #outliers to be updated
+library(dplyr)
+```
+
+```{r, echo=FALSE, fig.width=8, fig.height=5}
+# Select only numeric columns
+dataset_numeric <- select_if(dataset, is.numeric)
+
+#Performs PCA on the dataset and standardizes the data to ensure all variables have equal weight.
+pr.out=prcomp(dataset_numeric, scale=TRUE)
+
+#Saves the response variable for coloring points in PCA plots based on their class.
+classes <- dataset$Classes
+
+#Creates a function to assign unique colors to each category in the response variable.s
+Cols <- function(vec) {
+  # Convert to factor for consistent labeling
+  vec <- as.factor(vec)
+  
+  # Assign red for 'fire' and blue for 'no fire'
+  color_map <- c("fire" = "red", "no fire" = "blue")
+  
+  # Return colors based on the vector values
+  return(color_map[vec])
+}
+
+#Divides the plotting area into 1 row and 2 columns to display two plots side by side.
+par(mfrow=c(1,2))
+
+# Set the plotting area to 1 row and 2 columns with larger figure dimensions
+par(mfrow = c(1, 2), mar = c(5, 5, 4, 2))  # Adjust margins: mar = c(bottom, left, top, right)
+
+#Plotting First and second Principal Components
+plot(pr.out$x[,1:2], col=Cols(classes), pch=19,xlab="Z1",ylab="Z2")
+plot(pr.out$x[,c(1,3)], col=Cols(classes), pch=19,xlab="Z1",ylab="Z3")
+
+# Extract the importance of components
+pca_importance <- pr.out$sdev^2 / sum(pr.out$sdev^2)
+cumulative_variance <- cumsum(pca_importance)
+
+# Create a data frame for cleaner presentation
+pca_summary <- data.frame(
+  Component = paste0("PC", 1:length(pca_importance)),
+  Standard_Deviation = pr.out$sdev,
+  Proportion_of_Variance = round(pca_importance, 4),
+  Cumulative_Variance = round(cumulative_variance, 4)
+)
+```
+
+Visualizing Principal Component 1 vs. 2 and Principal Component 1 vs. 3 provides insights into the predictive potential of these transformed features. From these visualizations, we can observe how well-separated the response classes are based on the principal components, indicating high predictive power.
+
+```{r, echo=FALSE}
+# Print the formatted summary
+print(pca_summary)
+```
+
+As shown in the table, we have a total of 14 principal components. So, to determine which principal components to use for the models, we relied on two methods: the Scree Plot and the Cumulative Percentage of Variance Explained (PVE).
+
+```{r, echo=FALSE}
+# Calculate the percentage of variance explained (PVE)
+pve <- 100 * pr.out$sdev^2 / sum(pr.out$sdev^2)
+
+# Set up a 1x2 plotting area
+par(mfrow = c(1, 2))
+
+# First Plot: Scree Plot with Elbow Rule
+plot(pve, type = "o", ylab = "PVE (%)", xlab = "Principal Component", col = "blue", 
+     main = "Scree Plot", lwd = 2, pch = 19)
+
+# Estimate elbow point by finding the component where the drop in PVE slows down
+elbow_point <- which.max(diff(diff(pve)) < 0) + 1  # Basic estimation method
+
+
+# Highlight the elbow point
+points(elbow_point, pve[elbow_point], col = "red", pch = 19, cex = 1.5)
+
+# Adjust the position of the text label for better placement
+text(elbow_point, pve[elbow_point], labels = paste("PC", elbow_point), pos = 3, col = "red", cex = 1.2, offset = 1)
+
+
+# Second Plot: Cumulative PVE with 80% Threshold Line
+plot(cumsum(pve), type = "o", ylab = "Cumulative PVE (%)", xlab = "Principal Component",
+     col = "brown3", main = "Cumulative PVE")
+# Add a horizontal line at 80%
+abline(h = 80, col = "darkgreen", lty = 2)
+# Indicate where cumulative PVE crosses 80%
+pc_80 <- which(cumsum(pve) >= 80)[1]
+points(pc_80, cumsum(pve)[pc_80], col = "darkgreen", pch = 19)
+text(pc_80, cumsum(pve)[pc_80], labels = paste("PC", pc_80), pos = 4, col = "darkgreen")
+
+# Reset plotting area
+par(mfrow = c(1, 1))
+```
+
+**Scree Plot:**
+
+The scree plot shows the Proportion of Variance Explained (PVE) for each principal component. By applying the elbow rule, we identified the optimal number of components by finding the point where the decline in variance explained slows down significantly. To identify this elbow point, we used an algorithmic approach based on the second derivative — essentially, the elbow point occurs when the rate of change of the variance explained decreases. From the scree plot, PC6 was identified as the elbow point.
+
+**Cumulative PVE:**
+
+In addition to the scree plot, we considered the cumulative PVE. By applying the conventional 80% cutoff, we determined the point where the cumulative variance explained reaches at least 80%. This analysis showed that the first 5 principal components are sufficient to capture at least 80% of the data’s variance.
+
+**Consensus:**
+
+Given the results from both methods, we reached a consensus to use the first 5 principal components for our models. These components were identified as significant using both the scree plot and cumulative PVE methods, ensuring that they provide a balanced representation of the data's variance while minimizing redundancy.
+
+```{r, echo=FALSE}
+# Extract the first 5 principal components
+pc <- pr.out$x[, 1:5]
+
+# Create a new dataframe with the first 5 principal components and the response variable
+pc_data <- data.frame(pc, Classes = dataset$Classes)
+
+# View the combined data
+head(pc_data)
+
+```
+
+After extracting the first 5 principle components, we are ready to begin training different classification models.
+
+# Model Development
+
+We will begin by initializing some useful functions that will be consistently used throughout our project.
+
+## Initiating functions
+
+First, we will define a **data-splitting function** to divide our dataset into 70% training and 30% test sets. To ensure reproducibility, we will set a seed for the random number generator. This function allows us to reinitialize the training and test sets whenever necessary, especially if we make changes or manipulations to the data.
+
+```{r}
+# This function will be consistently used throughout the project to reinitialize the training and test sets.
+split_set <- function() {
+    # Set a random seed for reproducibility
+  set.seed(1)
+  
+  # 'pc_data' is our dataset that contains the 5 principal components for each
+  # Sample 70% of the rows for the training set
+  train_indices <- sample(nrow(pc_data), size = floor(0.7 * nrow(pc_data)))  # 70% for training
+
+  # Create the training set using the sampled indices
+  train_set <- pc_data[train_indices, ]
+
+  # Create the test set using the remaining rows (complement of the training set)
+  test_set <- pc_data[-train_indices, ]
+
+  # Return the training and test sets as a list
+  return(list(train_set = train_set, test_set = test_set))
+}
+
+```
+
+Next, we will define a **confusion matrix function** to visualize and assess the performance of each model. This function will generate a confusion matrix to help evaluate how well the models are predicting the outcomes.
+
+```{r}
+# Function to create and visualize a confusion matrix
+create_confusion_matrix <- function(test_set, predicted_col, truth_col) {
+  library(caret)
+  test_set[[predicted_col]] <- factor(test_set[[predicted_col]], levels = c("not fire", "fire"))
+  test_set[[truth_col]] <- factor(test_set[[truth_col]], levels = c("not fire", "fire"))
+  
+  cm = confusionMatrix(test_set[[predicted_col]], test_set[[truth_col]])
+  cmtable = cm$table
+  return (cmtable)
+}
+```
+
+Finally, we will create a function that utilizes the `caret` library to **calculate Accuracy, Precision, Recall, and the F1 Score**. These metrics are essential for evaluating the performance of each model.
+
+```{r, warning=FALSE, message=FALSE}
+simple_metrics <- function(test_set, predicted_col, truth_col) {
+  # Load the libraries
+  library(caret)
+
+  # Ensure actual and predicted are factors with identical levels
+   test_set[[predicted_col]] <- factor(test_set[[predicted_col]], levels = c("not fire", "fire"))
+  test_set[[truth_col]] <- factor(test_set[[truth_col]], levels = c("not fire", "fire"))
+  
+  cm = confusionMatrix(test_set[[predicted_col]], test_set[[truth_col]])
+  # Calculate the confusion matrix using the table() function
+  # Rows represent the predicted classes, columns represent the actual classes
+  cm$table 
+  
+  accuracy = cm$overall['Accuracy']
+  precision = cm$byClass['Precision']
+  recall = cm$byClass['Recall']
+  f1_score = cm$byClass['F1']
+  
+  # Return the metrics as a vector
+  return(c(accuracy, precision, recall, f1_score))
+}
+```
+
+## Machine Learning Models
+
+### The Mystery of the pruned/unpruned Trees
+
+Before utilizing the PCA data, we would like to discuss interesting observations we found when working with the trees.
+
+When we input the data after the processing steps (but before the feature selection), the unpruned tree appears like so:
+
+```{r, warning=FALSE}
+library(rpart)
+library(rpart.plot)
+set.seed(1)
+# Sample 70% of the rows for the training set
+train_indices <- sample(nrow(dataset), size = floor(0.7 * nrow(dataset)))  # 70% for training
+
+# Create the training set using the sampled indices
+train_set <- dataset[train_indices, ]
+train_set$Classes <- factor(train_set$Classes, levels = c("not fire", "fire"))
+
+# Create the test set using the remaining rows (complement of the training set)
+test_set <- dataset[-train_indices, ]
+test_set_Tree1 <- test_set
+
+tree_model <- rpart(Classes ~ ., train_set, method = "class")
+
+rpart.plot(tree_model)
+
+```
+
+We've tried multiple libraries and packages, but all of them provided a tree with only 1-2 features.
+
+The below tree was created using code meant for pruned trees utilizing the libraries `tidymodels` and `rpart.plot`:
+
+```{r,warning=FALSE, message=FALSE}
+library(tidymodels)
+library(rpart.plot)
+set.seed(1)
+# Sample 70% of the rows for the training set
+train_indices <- sample(nrow(dataset), size = floor(0.7 * nrow(dataset)))  # 70% for training
+
+# Create the training set using the sampled indices
+train_set <- dataset[train_indices, ]
+train_set$Classes <- factor(train_set$Classes, levels = c("not fire", "fire"))
+
+# Create the test set using the remaining rows (complement of the training set)
+test_set <- dataset[-train_indices, ]
+test_set_Tree2 <- test_set
+
+#Create and train pruned tree\
+tree_spec <- decision_tree(cost_complexity = 0.01) %>%
+ set_engine("rpart") %>%
+ set_mode("classification")
+
+tree_fit <- tree_spec %>%
+ fit(Classes ~ ., data = train_set)
+
+# Make predictions on the testing data
+predictions <- predict(tree_fit, new_data = test_set_Tree2)
+
+# To get the predicted class labels
+test_set_Tree2$predicted_class_Tree2 <- predictions$.pred_class
+
+rpart.plot(tree_fit$fit, type = 3, extra = 101, under = TRUE, cex = 0.8, box.palette = "auto")
+```
+
+It's the exact same result. To quickly assess the performance of the tree:
+
+```{r, warning=FALSE, message=FALSE}
+create_confusion_matrix(test_set_Tree2,"predicted_class_Tree2","Classes")
+```
+
+```{r}
+simple_metrics(test_set_Tree2,"predicted_class_Tree2","Classes")
+```
+
+The decision tree model performs exceptionally well on the test data, achieving an accuracy of 98.6%, precision of 100%, recall of 97.1%, and an F1 score of 98.6%. The confusion matrix shows only one false negative and no false positives, indicating strong predictive power with minimal errors. The tree relies on a single feature (FFMC) for its splits, making it highly interpretable. While the results are excellent, it seems too good to be true and we will continue by testing on other tree models.
+
+### Bagging, Random Forest, and Boosting
+
+For Bagging and Random forest we used the `randomForest` library while for Boosting we used the `gbm` library.
+
+**1) Bagging**
+
+```{r, warning=FALSE, message=FALSE}
+library(randomForest)
+set.seed(1)
+# Sample 70% of the rows for the training set
+  train_indices <- sample(nrow(dataset), size = floor(0.7 * nrow(dataset)))  # 70% for training
+
+# Create the training set using the sampled indices
+train_set <- dataset[train_indices, ]
+train_set$Classes <- factor(train_set$Classes, levels = c("not fire", "fire"))
+
+# Create the test set using the remaining rows (complement of the training set)
+test_set <- dataset[-train_indices, ]
+test_set_Tree3 <- test_set
+
+bagClass = rep(0,500)
+minTCE = 1
+for(i in 1:500){
+  bag_classes <- randomForest(Classes ~ ., data = train_set, mtry = (ncol(train_set)), ntree = i)
+  test_set_Tree3$predicted_class_Tree3 <- predict(bag_classes, subset(test_set_Tree3, select = -`Classes`))
+  mm = simple_metrics(test_set_Tree3,"predicted_class_Tree3","Classes")
+  bagClass[i] = 1 - mm['Accuracy']
+  if (minTCE > bagClass[i]){
+    minTCE = bagClass[i]
+    treenum = i
+  }
+}
+
+```
+
+**2) Random Forest**
+
+```{r}
+set.seed(1)
+library(randomForest)
+# Sample 70% of the rows for the training set
+  train_indices <- sample(nrow(dataset), size = floor(0.7 * nrow(dataset)))  # 70% for training
+
+# Create the training set using the sampled indices
+train_set <- dataset[train_indices, ]
+train_set$Classes <- factor(train_set$Classes, levels = c("not fire", "fire"))
+
+# Create the test set using the remaining rows (complement of the training set)
+test_set <- dataset[-train_indices, ]
+test_set_Tree4 <- test_set
+
+rfClass = rep(0,500)
+minTCE = 1
+for(i in 1:500){
+  rf_classes <- randomForest(Classes ~ ., train_set, ntree = i, mtry = sqrt(ncol(train_set)), importance = TRUE)
+  test_set_Tree4$predicted_class_Tree4 <- predict(rf_classes, subset(test_set_Tree4, select = -`Classes`))
+  mm = simple_metrics(test_set_Tree4,"predicted_class_Tree4","Classes")
+  rfClass[i] = 1 - mm['Accuracy']
+  if (minTCE > rfClass[i]){
+    minTCE = rfClass[i]
+    treenum = i
+  }
+}
+```
+
+**3) Boosting**
+
+```{r, warning=FALSE, message=FALSE}
+set.seed(1)
+library(gbm)
+# Sample 70% of the rows for the training set
+  train_indices <- sample(nrow(dataset), size = floor(0.7 * nrow(dataset)))  # 70% for training
+
+# Create the training set using the sampled indices
+train_set <- dataset[train_indices, ]
+# Encode the response for Boosting (it requires numerical responses)
+# 0 represents "not fire" and 1 represents "fire"
+train_set$Classes <- ifelse(train_set$Classes == "fire", 1, 0)
+
+# Create the test set using the remaining rows (complement of the training set)
+test_set <- dataset[-train_indices, ]
+
+test_set_Tree5 <- test_set
+test_set_Tree6 <- test_set
+
+btClass1 = rep(0,500)
+minTCE = 1
+for(i in 1:500){
+  boost_classes =gbm(Classes~.,train_set, distribution="bernoulli",
+n.trees =i, interaction.depth =1)
+  test_set_Tree5$predicted_class_Tree5 <- ifelse(predict(boost_classes, subset(test_set_Tree5, select = -`Classes`), n.trees = i) > 0.5,"fire","not fire")
+  mm = simple_metrics(test_set_Tree5,"predicted_class_Tree5","Classes")
+  btClass1[i] = 1 - mm['Accuracy']
+  }
+
+btClass2 = rep(0,500)
+minTCE2 = 1
+for(i in 1:500){
+  boost_classes =gbm(Classes~.,train_set, distribution="bernoulli",
+n.trees =i, interaction.depth =1)
+  test_set_Tree6$predicted_class_Tree6 <- ifelse(predict(boost_classes, subset(test_set_Tree6, select = -`Classes`), n.trees = i) > 0.5,"fire","not fire")
+  mm2 = simple_metrics(test_set_Tree6,"predicted_class_Tree6","Classes")
+  btClass2[i] = 1 - mm2['Accuracy']
+}
+```
+
+**Plotting**
+
+```{r, echo=FALSE,eval=TRUE,message=FALSE, warning=FALSE}
+
+library(ggplot2)
+
+# Creating a dataframe
+df <- data.frame(
+  x = 1:500,
+  bagging = bagClass,
+  rf = rfClass,
+  boost1 = btClass1,
+  boost2 = btClass2
+)
+
+# Create the plot
+ggplot(df, aes(x = x)) +
+  geom_smooth(aes(y = bagging, color = "m=p"), se = FALSE) +
+  geom_smooth(aes(y = rf, color = "m=sqrt(p)"), se = FALSE) +
+  geom_smooth(aes(y = boost1, color = "boosting, depth = 1"), se = FALSE) +
+  geom_smooth(aes(y = boost2, color = "boosting, depth = 2"), se = FALSE) +
+  labs(x = "Number of Trees", y = "Test Classification Error") +
+  scale_color_manual(values = c("orange", "lightblue", "lightgreen", "pink")) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_rect(colour = "black", fill = NA))
+```
+
+The results indicate that boosting with a tree depth of 1 achieves the lowest test classification error, making it the best-performing model for this dataset. Boosting with depth 2 also performs well but slightly worse, suggesting diminishing returns and potential overfitting with deeper trees. In contrast, random forest models perform worse, with the configuration using m = sqrt(p) showing consistently high error. This highlights the superiority of boosting for this dataset, particularly with shallow trees, and suggests that increasing the number of trees beyond 200–300 yields minimal additional benefit.
+
+Thus, the confusion matrix at the optimal tree number (estimated from the graph's lowest point) for boosting depth 1:
+
+```{r}
+# Sample 70% of the rows for the training set
+set.seed(1)
+train_indices <- sample(nrow(dataset), size = floor(0.7 * nrow(dataset)))  # 70% for training
+
+# Create the training set using the sampled indices
+train_set <- dataset[train_indices, ]
+train_set$Classes <- ifelse(train_set$Classes == "fire", 1, 0)
+
+# Create the test set using the remaining rows (complement of the training set)
+test_set <- dataset[-train_indices, ]
+test_set_Tree5 <- test_set
+
+#Number of trees = 350
+boost_classes =gbm(Classes~.,
+                   train_set, 
+                   distribution="bernoulli",
+                   n.trees =350, 
+                   interaction.depth =1)
+
+test_set_Tree5$predicted_class_Tree5 <- ifelse(predict(boost_classes, subset(test_set_Tree5, select = -`Classes`), n.trees = 200) > 0.5,"fire","not fire")
+
+mm = simple_metrics(test_set_Tree5,"predicted_class_Tree5","Classes")
+```
+
+```{r, echo=FALSE}
+#Test Classification Error
+cat("Test Classification Error: ",1 - mm['Accuracy'], "\n\n")
+
+#Metrics
+mm
+
+#Confusion Matrix
+cat("\n")
+create_confusion_matrix(test_set_Tree5,"predicted_class_Tree5","Classes")
+```
+
+### Logistic Regression
+
+After preparing the training and test sets, we begin training our model using the first 5 principal components. Note that we encoded the response variable because the logistic regression model requires a numerical (binary) response and cannot handle qualitative responses directly.
+
+```{r}
+# Call the splitting function to divide the dataset into training and test sets
+split <- split_set()
+train_set_Log <- split$train_set
+test_set_Log <- split$test_set
+
+# Encode the response for Logistic Regression (it requires numerical responses)
+# 0 represents "not fire" and 1 represents "fire"
+train_set_Log$Classes <- ifelse(train_set_Log$Classes == "fire", 1, 0)
+
+# Fit the logistic regression model using the 5 principal components
+logistic_model <- glm(Classes ~ PC1 + PC2 + PC3 + PC4 + PC5, 
+                      data = train_set_Log, 
+                      family = "binomial")
+
+# Print the summary of the logistic regression model                  
+summary(logistic_model)
+
+```
+
+The intercept has an estimate of 1.58440 with a p-value of 0.00108, making it statistically significant at the 0.01 level. The coefficient for PC1 is 2.48862 with a p-value of 3.11e-07, indicating high significance at the 0.001 level. This means that a one-unit increase in PC1 increases the log-odds of predicting "fire" by 2.48862, suggesting that PC1 plays a strong role in predicting the outcome.
+
+The coefficient for PC5 is 1.59125 with a p-value of 0.00167, also indicating high significance at the 0.001 level. In contrast, the coefficients for PC2, PC3, and PC4 are -0.23449, 0.57344, and 0.03945, with p-values of 0.40404, 0.11911, and 0.90956, respectively. These p-values indicate that PC2, PC3, and PC4 are not significant and do not meaningfully contribute to predicting the outcome
+
+After training the model, we proceed to test it on the hold-out set. Since the predictions are probabilistic, we will use these probabilities to manually assign the response for each individual entry.
+
+```{r}
+# Now it is time to make predictions on the test set using the logistic regression model
+# 'type = "response"' returns predicted probabilities for the binary outcome
+test_set_Log$predicted_prob <- predict(logistic_model, test_set_Log, type = "response")
+
+# Classify the predictions: if the predicted probability > 0.5, classify as "fire" otherwise classify as "not fire"
+test_set_Log$predicted_class_Log <- ifelse(test_set_Log$predicted_prob > 0.5, "fire", "not fire")
+```
+
+```{r}
+create_confusion_matrix(test_set_Log, "predicted_class_Log", "Classes")
+```
+
+Based on our confusion matrix, the true positives and true negatives are highlighted in green, indicating that these cells contain a high number of correctly predicted observations.
+
+```{r}
+simple_metrics(test_set_Log, "predicted_class_Log", "Classes")
+```
+
+The model demonstrates strong performance with an accuracy of 85.51%, indicating it correctly predicted the majority of observations. The precision of 83.33% shows that when the model predicted "fire," it was correct 83.33% of the time, minimizing false positives. The recall of 88.24% indicates that 88.24% of actual "fire" cases were correctly identified, reducing the chance of missing fires. The F1 score of 85.71% reflects a balanced trade-off between precision and recall. Overall, the model is effective at predicting fire occurrences with a good balance between capturing true positives and avoiding false positives.
+
+### Linear Discriminant Analysis (LDA)
+
+```{r, message=FALSE}
+# Perform the train-test split using the split_set() function
+split <- split_set()
+train_set <- split$train_set
+test_set_LDA <- split$test_set
+
+# Load the required library for LDA
+library(MASS)
+
+# Fitting the Linear Discriminant Analysis (LDA) model using the 5 principal components
+lda_model <- lda(Classes ~ PC1 + PC2 + PC3 + PC4 + PC5, data = train_set)
+
+# Print the summary of the LDA model to display the prior probabilities, group means, and coefficients
+print(lda_model)
+```
+
+The prior probabilities indicate that approximately 58.39% of the observations are classified as "fire," while 41.61% are classified as "not fire," suggesting a slightly higher prevalence of fire incidents in the dataset. Examining the group means for each principal component (PC), we observe that "fire" cases have higher mean values for PC1, PC3, PC4, and PC5, while PC2 is slightly lower compared to "not fire" cases.
+
+The coefficients of the linear discriminant function (LD1) reveal that PC1 has the most significant impact on distinguishing between "fire" and "not fire" cases, with a coefficient of -0.5938, indicating that higher values of PC1 are associated with the "not fire" group. Other components, such as PC3 and PC5, also contribute to the discrimination, with coefficients of -0.3124 and -0.4042, respectively, suggesting that higher values of these components are linked to the "not fire" group. In summary, PC1 plays a crucial role in differentiating between the two groups, with higher values favoring the "not fire" classification, while the other components have lesser but notable contributions.
+
+```{r}
+# Predict on the test set using the LDA model
+lda_predictions <- predict(lda_model, newdata = test_set_LDA)
+
+# Add the predicted class to the test set
+test_set_LDA$predicted_class_LDA <- lda_predictions$class
+test_set_LDA$predicted_probabilities <- lda_predictions$posterior[, "fire"]
+```
+
+```{r}
+create_confusion_matrix(test_set_LDA,"predicted_class_LDA", "Classes")
+```
+
+As previously observed in the Logistic Regression model, the confusion matrix for LDA also shows green highlights in the True Negative (TN) and True Positive (TP) regions, indicating that LDA is performing well in terms of prediction.
+
+```{r}
+simple_metrics(test_set_LDA,"predicted_class_LDA", "Classes")
+```
+
+The LDA model demonstrates solid performance with an accuracy of 82.61%, indicating it correctly predicted the majority of observations. The precision of 80.56% shows that when the model predicted "fire," it was correct 80.56% of the time, suggesting moderate control over false positives. The recall of 85.29% indicates that 85.29% of actual "fire" cases were correctly identified, reflecting the model's effectiveness in minimizing missed detections (false negatives). The F1 Score of 82.86% reflects a good balance between precision and recall, making it a reliable overall measure of performance. Compared to Logistic Regression, LDA shows slightly lower accuracy, precision, and F1 Score, suggesting that Logistic Regression may have a slight edge in predictive power. However, LDA still maintains high recall, demonstrating its capability to identify fire cases effectively.
+
+### QDA
+
+```{r}
+# Perform the train-test split using the split_set() function
+split <- split_set()
+train_set <- split$train_set
+test_set_QDA <- split$test_set
+
+# Load the required library for QDA
+library(MASS)
+
+# Fit the Quadratic Discriminant Analysis (QDA) model using the 5 principal components
+qda_model <- qda(Classes ~ PC1 + PC2 + PC3 + PC4 + PC5, data = train_set)
+
+# Print the summary of the QDA model to display prior probabilities and group means
+print(qda_model)
+
+```
+
+The group means indicate significant differences between the two classes for some principal components. Specifically, PC1 shows a clear distinction, with the "fire" group having a mean of 1.664 and the "not fire" group having a mean of -2.049. PC3 also displays some separation, with means of 0.117 for the "fire" group and -0.324 for the "not fire" group. In contrast, PC2, PC4, and PC5 show mean values close to zero for both groups, suggesting they contribute less to differentiating between the two classes. Overall, PC1 plays the most significant role in distinguishing the two groups, followed by PC3. The QDA model, with its ability to handle non-linear boundaries, provides flexibility in classification compared to models like LDA.
+
+```{r}
+# Predict on the test set using the QDA model
+qda_predictions <- predict(qda_model, newdata = test_set_QDA)
+
+# Add the predicted class to the test set
+test_set_QDA$predicted_class_QDA <- qda_predictions$class
+test_set_QDA$predicted_probabilities=qda_predictions$posterior[, "fire"]
+
+
+```
+
+```{r}
+
+create_confusion_matrix(test_set_QDA,'predicted_class_QDA','Classes')
+
+```
+
+```{r}
+simple_metrics(test_set_QDA,"predicted_class_QDA", "Classes")
+
+```
+
+The QDA model demonstrates solid performance with an accuracy of 84.06%, indicating that it correctly predicts the majority of observations. The precision of 81.08% shows that when the model predicts "fire," it is correct 81.08% of the time, suggesting moderate control over false positives. The recall of 88.24% indicates that the model captures 88.24% of actual "fire" cases, meaning it effectively minimizes false negatives. The F1 Score of 84.51% reflects a balanced trade-off between precision and recall.
+
+When compared to the LDA model, which had an accuracy of 82.61%, precision of 80.56%, recall of 85.29%, and F1 score of 82.86%, QDA shows a slight improvement in all metrics. This suggests that QDA's ability to handle non-linear decision boundaries allows it to capture the patterns in the data more effectively than LDA.
+
+Compared to Logistic Regression, which had an accuracy of 85.51%, precision of 83.33%, recall of 88.24%, and F1 score of 85.71%, QDA performs slightly worse in terms of accuracy and F1 score but maintains a similar recall. This indicates that while Logistic Regression remains the top-performing model in terms of overall predictive power, QDA still offers a reliable alternative, especially when the assumption of linear boundaries may not hold.
+
+### KNN
+
+First, let's set up the input
+
+```{r}
+#setting up the training and test sets
+split <- split_set()
+train_set <- split$train_set
+test_set_KNN <- split$test_set
+
+train.X=subset(train_set, select = -`Classes`)
+test.X=subset(test_set_KNN, select = -`Classes`)
+train.Classes=train_set$Classes
+```
+
+Now, we will run KNN with the `class` library. We will test for 30 different values of K.
+
+```{r,eval=TRUE,warning=FALSE}
+library(class)
+
+#applying KNN
+set.seed(1)
+kcm = rep(0,30)
+maxf1 = 0
+for(i in 1:30){
+  knn.pred=knn(train.X,test.X,train.Classes,k=i)
+  test_set_KNN$predicted_class_KNN <- knn.pred
+  mm = simple_metrics(test_set_KNN,"predicted_class_KNN","Classes")
+  kcm[i] = mm['F1']
+  if (maxf1 < kcm[i]){
+    maxf1 = kcm[i]
+    kval = i
+    accuracy = mm['Accuracy']
+    table_knn = create_confusion_matrix(test_set_KNN, "predicted_class_KNN", "Classes")
+  }
+}
+```
+
+```{r, echo=FALSE}
+plot(kcm, 
+     ylab = "F1-Score", xlab = "Value of K", main = "KNN", 
+     type = "b", col = "blue")
+```
+
+```{r, echo=FALSE}
+cat("The best performing k =", kval, "\n")
+cat("Accuracy =", accuracy, "\n\n")
+cat("Confusion Matrix", "\n")
+table_knn
+```
+
+From the results we see that the best performing K was at k = 18. This where the test F1-score reaches peak, and then decreases. The confusion matrix corresponds to that same point, and along with the accuracy (89.85%), shows the high performance of KNN on our data. Up until now, KNN is the best performing model utilizing the PCA data.
+
+### SVM
+
+```{r, warning=FALSE, message=FALSE}
+library(e1071)
+
+split <- split_set()
+train_set <- split$train_set
+test_set_SVM <- split$test_set
+train_set$Classes <- ifelse(train_set$Classes == "fire", 1, 0)
+
+# Fit the SVM model for classification with a linear kernel
+svm_model <- svm(Classes ~ PC1 + PC2 + PC3 + PC4 + PC5, 
+                 data = train_set, 
+                 kernel = "linear", 
+                 cost = 1, 
+                 type = "C-classification",
+                  probability = TRUE)
+
+# Print the summary of the SVM model
+print(svm_model)
+```
+
+The Support Vector Machine (SVM) model is performing a C-classification task using a linear kernel with a cost parameter of 1. This means the model aims to separate the classes ("fire" and "not fire") using a straight-line decision boundary while balancing the trade-off between misclassification and a smooth boundary. The model relies on 44 support vectors, which are the critical data points that determine the position of the decision boundary. A moderate number of support vectors suggests the model is relatively simple and should generalize well to new data. Overall, the SVM model appears efficient and effective for this classification task.
+
+```{r}
+# Predict on the test set using the trained SVM model
+svm_predictions <- predict(svm_model, newdata = test_set_SVM,probability=TRUE)
+
+#save probabilities
+svm_probabilities <- attr(svm_predictions, "probabilities")
+
+# Encode the predictions: 1 becomes "fire", and 0 becomes "not fire"
+svm_predictions <- ifelse(svm_predictions == 1, "fire", "not fire")
+
+# Add the predicted class as a new column in the test set
+test_set_SVM$predicted_class_SVM <- svm_predictions
+```
+
+```{r}
+create_confusion_matrix(test_set_SVM,"predicted_class_SVM","Classes")
+```
+
+```{r}
+simple_metrics(test_set_SVM,"predicted_class_SVM","Classes")
+```
+
+The SVM model demonstrates strong performance with an accuracy of 88.41%, meaning it correctly predicted 88.41% of the observations. The precision of 86.11% indicates that when the model predicted "fire," it was correct 86.11% of the time, showing effective control over false positives. The recall of 91.18% reflects the model's ability to identify 91.18% of actual "fire" cases, minimizing the occurrence of false negatives. The F1 Score of 88.57% represents a balanced trade-off between precision and recall, making the model reliable for classification tasks. Compared to other models like Logistic Regression and LDA, the SVM shows superior performance, especially in terms of accuracy and recall. This suggests that the SVM effectively captures the patterns in the data, leveraging the linear decision boundary to achieve robust predictions.
+
+## Cross Validation
+
+We will be applying a cross-validation analysis on the logistic Regression Model. We will use the `cv.glm()` function which is part of the `boot` library to asses the effect of varying polynomial degree levels on the prediction of the model on this dataset.
+
+```{r, message =FALSE, warning=FALSE}
+library(boot)
+set.seed(1)
+
+#Perform cross-validation on different polynomial values
+cv.error.10=rep(0,10) #array of 10 zeroes
+pc_data$Classes <- ifelse(pc_data$Classes == "fire", 1, 0)
+
+for (i in 1:10){
+ glm.fit=glm(Classes~poly(PC1, i) + poly(PC2, i) + poly(PC3, i) + poly(PC4, i)+poly(PC5,i),data=pc_data, family = "binomial")
+ cv.error.10[i]=cv.glm(pc_data,glm.fit,K=10)$delta[1] 
+ }
+```
+
+```{r, echo=FALSE}
+plot(cv.error.10, 
+     ylab = "Mean Square Error", xlab = "Degree of Polynomial", main = "10-fold CV", 
+     type = "b", col = "blue")
+```
+
+The 10-fold cross-validation results for logistic regression show that the mean squared error (MSE) remains low and stable for polynomial degrees between 1 and 9, indicating good generalization and minimal overfitting within this range. However, at degree 10, the MSE spikes significantly, suggesting overfitting as the model becomes too complex and starts capturing noise instead of underlying patterns. This highlights the importance of choosing an appropriate polynomial degree to balance bias and variance. Based on the results, polynomial degrees between 1 and 4 are likely optimal for this dataset, providing a balance between simplicity and performance. High-degree polynomials, such as degree 10, should be avoided to prevent overfitting.
+
+# Final comparison of Models and Verdict
+
+## The Metrics
+
+```{r, echo=FALSE}
+table_final <- list(
+  Pruned_Tree = as.data.frame(as.list(simple_metrics(test_set_Tree2, "predicted_class_Tree2", "Classes"))),
+  Boosting    = as.data.frame(as.list(simple_metrics(test_set_Tree5, "predicted_class_Tree5", "Classes"))),
+  Log         = as.data.frame(as.list(simple_metrics(test_set_Log,   "predicted_class_Log",   "Classes"))),
+  LDA         = as.data.frame(as.list(simple_metrics(test_set_LDA,   "predicted_class_LDA",   "Classes"))),
+  QDA         = as.data.frame(as.list(simple_metrics(test_set_QDA,   "predicted_class_QDA",   "Classes"))),
+  KNN         = as.data.frame(as.list(simple_metrics(test_set_KNN,   "predicted_class_KNN",   "Classes"))),
+  SVM         = as.data.frame(as.list(simple_metrics(test_set_SVM,   "predicted_class_SVM",   "Classes")))
+)
+
+# Combine safely
+table_final_df <- do.call(rbind, table_final)
+
+print(table_final_df)
+
+```
+
+The pruned decision tree and boosting models remain the top performers, achieving the highest metrics across all evaluation categories. The pruned tree achieved perfect precision (1.000) and near-perfect recall (0.971), indicating no false positives and very few missed "fire" cases, making it the most balanced and interpretable model. Boosting matched the pruned tree in accuracy (98.55%) and slightly outperformed in recall (1.000), suggesting it is more sensitive to "fire" cases but had slightly lower precision (0.972), introducing some false positives. Logistic regression, though simpler, showed moderate performance with an accuracy of 85.51%, but its lower recall (0.829) means it missed more "fire" cases, which could be critical in the context of fire classification.
+
+Linear and Quadratic Discriminant Analysis (LDA and QDA) showed limited effectiveness, with accuracies of 82.61% and 84.06%, respectively, and recalls of 0.800, making them less suited for this dataset. KNN with optimal k = 18 achieved a decent accuracy of 85.51% and the highest precision (0.931), but its recall (0.771) was the lowest among the models, highlighting its inability to detect a significant portion of "fire" cases. The SVM with a linear kernel showed strong performance, with accuracy (86.96%), precision (0.906), and recall (0.829) surpassing logistic regression and discriminant analysis but still falling short of the pruned tree and boosting.
+
+## ROC curves and AUC
+
+Now we will compute the **ROC curves and the AUC** for some of the models that returned back probability values. We utilized the libraries `ggplot2` and `pROC`.
+
+**1) Logistic Regression**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Install and load required libraries
+if (!requireNamespace("pROC", quietly = TRUE)) {
+  install.packages("pROC")
+}
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2")
+}
+
+library(pROC)
+library(ggplot2)
+test_set=test_set_Log
+predicted_prob_col="predicted_prob"
+truth_col="Classes"
+# Function to plot ROC curve and calculate AUC
+  # Ensure the actual class is a factor
+  test_set[[truth_col]] <- as.factor(test_set[[truth_col]])
+  
+  # Compute the ROC curve
+  roc_curve <- roc(test_set[[truth_col]], test_set[[predicted_prob_col]], levels = c("not fire", "fire"))
+  
+  # Calculate the AUC
+  auc_value <- auc(roc_curve)
+  
+  # Plot the ROC curve
+  roc_plot <- ggplot(data.frame(fpr = roc_curve$specificities, tpr = roc_curve$sensitivities), aes(x = 1 - fpr, y = tpr)) +
+    geom_line(color = "blue", size = 1) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey") +
+    labs(
+      title = paste("ROC Curve (AUC =", round(auc_value, 4), ")"),
+      x = "False Positive Rate (1 - Specificity)",
+      y = "True Positive Rate (Sensitivity)"
+    ) +
+    theme_minimal()
+  
+  # Display the plot
+  print(roc_plot)
+```
+
+**2) LDA**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Install and load required libraries
+if (!requireNamespace("pROC", quietly = TRUE)) {
+  install.packages("pROC")
+}
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2")
+}
+
+library(pROC)
+library(ggplot2)
+
+# Function to generate and plot ROC curve and calculate AUC
+plot_roc_auc <- function(actual, predicted_prob) {
+  # Ensure actual values are numeric (0 or 1)
+  actual <- as.numeric(as.character(actual))
+  
+  # Generate ROC curve using pROC
+  roc_obj <- roc(actual, predicted_prob)
+  
+  # Calculate AUC
+  auc_value <- auc(roc_obj)
+  
+  # Plot the ROC curve using ggplot2
+  roc_plot <- ggroc(roc_obj, size = 1, colour = "blue") +
+    ggtitle(paste("ROC Curve (AUC =", round(auc_value, 4), ")")) +
+    xlab("1 - Specificity") +
+    ylab("Sensitivity") +
+    theme_minimal()
+  
+  # Print the plot to ensure it renders
+  print(roc_plot)
+  
+  # Return the AUC value
+  return(auc_value)
+}
+
+# Call the function
+test_set_LDA$Classes <- ifelse(test_set_LDA$Classes == "fire",1,0)
+auc_result <- plot_roc_auc(test_set_LDA$Classes, test_set_LDA$predicted_probabilities)
+```
+
+**3) QDA**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Install and load required libraries
+if (!requireNamespace("pROC", quietly = TRUE)) {
+  install.packages("pROC")
+}
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2")
+}
+
+library(pROC)
+library(ggplot2)
+
+# Function to generate and plot ROC curve and calculate AUC
+plot_roc_auc <- function(actual, predicted_prob) {
+  # Ensure actual values are numeric (0 or 1)
+  actual <- as.numeric(as.character(actual))
+  
+  # Generate ROC curve using pROC
+  roc_obj <- roc(actual, predicted_prob)
+  
+  # Calculate AUC
+  auc_value <- auc(roc_obj)
+  
+  # Plot the ROC curve using ggplot2
+  roc_plot <- ggroc(roc_obj, size = 1, colour = "blue") +
+    ggtitle(paste("ROC Curve (AUC =", round(auc_value, 4), ")")) +
+    xlab("1 - Specificity") +
+    ylab("Sensitivity") +
+    theme_minimal()
+  
+  # Print the plot to ensure it renders
+  print(roc_plot)
+  
+  # Return the AUC value
+  return(auc_value)
+}
+
+# Example usage
+# Replace with your actual data
+# Example:
+# test_set$Classes <- c(1, 0, 1, 0, 1)
+# test_set$predicted_probabilities <- c(0.9, 0.2, 0.8, 0.1, 0.7)
+
+# Call the function
+test_set_QDA$Classes <- ifelse(test_set_QDA$Classes == "fire",1,0)
+auc_result <- plot_roc_auc(test_set_QDA$Classes, test_set_QDA$predicted_probabilities)
+```
+
+**4) SVM**
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Install and load required libraries
+if (!requireNamespace("pROC", quietly = TRUE)) {
+  install.packages("pROC")
+}
+if (!requireNamespace("ggplot2", quietly = TRUE)) {
+  install.packages("ggplot2")
+}
+
+library(pROC)
+library(ggplot2)
+
+# Function to generate and plot ROC curve and calculate AUC
+plot_roc_auc <- function(actual, predicted_prob) {
+  # Ensure actual values are numeric (0 or 1)
+  actual <- as.numeric(as.character(actual))
+  
+  # Generate ROC curve using pROC
+  roc_obj <- roc(actual, predicted_prob)
+  
+  # Calculate AUC
+  auc_value <- auc(roc_obj)
+  
+  # Plot the ROC curve using ggplot2
+  roc_plot <- ggroc(roc_obj, size = 1, colour = "blue") +
+    ggtitle(paste("ROC Curve (AUC =", round(auc_value, 4), ")")) +
+    xlab("1 - Specificity") +
+    ylab("Sensitivity") +
+    theme_minimal()
+  
+  # Print the plot to ensure it renders
+  print(roc_plot)
+  
+  # Return the AUC value
+  return(auc_value)
+}
+
+# Call the function
+test_set_SVM$Classes <- ifelse(test_set_SVM$Classes == "fire",1,0)
+auc_result <- plot_roc_auc(test_set_SVM$Classes, svm_probabilities[,1])
+```
+
+The AUC scores for the models are as follows: SVM (0.9445), Logistic Regression (0.9395), LDA (0.9345), and QDA (0.9269). These scores indicate that all four models perform well in distinguishing between the "fire" and "not fire" classes.
+
+SVM achieves the highest AUC, making it the most effective model for this task. Logistic Regression follows closely, showing consistent and reliable performance. LDA also performs well, though slightly behind SVM and Logistic Regression, likely due to its assumption of linear boundaries. QDA has the lowest AUC but still performs reasonably well, suggesting that its quadratic decision boundaries may not fit the dataset as effectively.
+
+Overall, SVM and Logistic Regression are the top-performing models in terms of AUC, providing the best balance of sensitivity and specificity for this classification task.
