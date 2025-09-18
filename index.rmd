@@ -1,4 +1,0 @@
----
-title: "Welcome to My Cars Website"
-output: html_document
----
